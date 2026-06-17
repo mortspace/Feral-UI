@@ -1,0 +1,596 @@
+/* Crumple — a stack of notes; each delete crushes the top card into a paper
+   ball and drops it in the wastepaper basket, which visibly fills up.
+   The motion timeline lives in Crumple.tsx; this is layout + the look of the
+   cards, the ball, and the basket staging. */
+
+.crumple {
+  position: relative;
+  width: 100%;
+  max-width: 440px;
+  height: 480px;
+  margin: 0 auto;
+  overflow: hidden;
+  --cr-card-bg: #ffffff;
+  --cr-card-ink: #1c1c1e;
+  --cr-card-muted: #8a8a8e;
+  --cr-card-faint: #b9b9bd;
+  --cr-red: #ff3b30;
+
+  /* note-card drop shadow — soft, mostly downward (low top-bleed so there's no
+     dark line above the card), themed so it stays subtle on either page */
+  --cr-card-shadow: drop-shadow(0 13px 22px rgba(0, 0, 0, 0.5)) drop-shadow(0 4px 7px rgba(0, 0, 0, 0.36));
+  --cr-card-shadow-hover: drop-shadow(0 20px 30px rgba(0, 0, 0, 0.55)) drop-shadow(0 5px 10px rgba(0, 0, 0, 0.4));
+
+  /* ---- the wire-mesh basket, themed for a dark page (default) ---- */
+  /* shaded interior: lit at the opening, deepening to shadow at the floor, so
+     the basket reads as a real vessel (and the depths never look see-through) */
+  --cr-cavity-top: rgba(38, 41, 48, 0.3);
+  --cr-cavity-mid: rgba(24, 27, 33, 0.46);
+  --cr-cavity-bot: rgba(10, 12, 16, 0.62);
+  /* mesh wires — the FRONT (near) wall is brighter/crisper than the BACK */
+  --cr-mesh-front: #e8ebf0;
+  --cr-mesh-back: #6b6f78;
+  --cr-mesh-front-op: 0.95;
+  --cr-mesh-back-op: 0.46;
+  /* cylinder edge shading on the mesh wall */
+  --cr-edge-shade: rgba(0, 0, 0, 0.36);
+  --cr-edge-light: rgba(255, 255, 255, 0.06);
+  /* the drawn floor the pile rests on (semi-transparent now) */
+  --cr-floor: rgba(40, 43, 50, 0.82);
+  /* shadows */
+  --cr-ground: rgba(0, 0, 0, 0.5);
+  --cr-ground-svg: rgba(0, 0, 0, 0.32);
+  --cr-pile-shadow-core: rgba(0, 0, 0, 0.85);
+}
+
+/* the app toggles html[data-theme]; retune the basket for a light page */
+:root[data-theme='light'] .crumple {
+  /* a substantial, graduated grey interior so the basket looks like a shaded
+     metal vessel — not a transparent washed-out shell — on a light page */
+  --cr-cavity-top: rgba(92, 98, 112, 0.3);
+  --cr-cavity-mid: rgba(70, 76, 90, 0.52);
+  --cr-cavity-bot: rgba(52, 58, 72, 0.7);
+  --cr-mesh-front: #767c88;
+  --cr-mesh-back: #a6acb6;
+  --cr-mesh-front-op: 0.95;
+  --cr-mesh-back-op: 0.5;
+  --cr-edge-shade: rgba(0, 0, 0, 0.18);
+  --cr-edge-light: rgba(255, 255, 255, 0);
+  --cr-floor: rgba(70, 76, 90, 0.6);
+  --cr-ground: rgba(24, 28, 38, 0.2);
+  --cr-ground-svg: rgba(28, 32, 42, 0.14);
+  --cr-pile-shadow-core: rgba(18, 22, 32, 0.55);
+  /* on a light page the card shadow must be far lighter or it reads as a heavy blob */
+  --cr-card-shadow: drop-shadow(0 13px 22px rgba(26, 30, 42, 0.11)) drop-shadow(0 4px 7px rgba(26, 30, 42, 0.08));
+  --cr-card-shadow-hover: drop-shadow(0 20px 30px rgba(26, 30, 42, 0.14)) drop-shadow(0 5px 11px rgba(26, 30, 42, 0.1));
+}
+
+/* top zone: the deck of cards with the ball parked over the top card */
+.cr-top {
+  position: absolute;
+  inset: 26px 0 auto 0;
+  display: grid;
+  justify-items: center;
+  height: 190px;
+  z-index: 3; /* the flying ball passes in FRONT of the basket until the mouth */
+}
+
+/* ---- the deck --------------------------------------------------------------- */
+.cr-deck {
+  position: relative;
+  width: 248px;
+  height: 148px;
+}
+
+.cr-card {
+  position: absolute;
+  inset: 0;
+  /* deck promotion: when a card moves up a rank, this transition carries it */
+  transition:
+    transform 0.34s cubic-bezier(0.34, 1.45, 0.64, 1),
+    opacity 0.3s ease;
+}
+
+.cr-card-top {
+  z-index: 3;
+}
+
+/* the live card lifts toward you on hover — an invitation. The lift + shadow
+   ride the CHILD (.cr-crush), never the :hover target (.cr-card-top), so a
+   cursor on the card's bottom edge can't pull the edge out from under itself
+   (flicker loop). Gated to fine hover pointers so a tap doesn't latch the
+   lifted/shadowed state with no pointer present. */
+.cr-crush {
+  transition:
+    transform 0.2s ease,
+    filter 0.2s ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .crumple[data-phase='idle'] .cr-card-top:hover .cr-crush {
+    transform: translateY(-3px);
+    filter: var(--cr-card-shadow-hover);
+  }
+}
+
+.cr-card-b1 {
+  z-index: 2;
+  transform: translateY(14px) scale(0.94);
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+.cr-card-b2 {
+  z-index: 1;
+  transform: translateY(26px) scale(0.88);
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+/* the crush wrapper takes the crumple transforms so they never fight the
+   deck-promotion transition on .cr-card */
+.cr-crush {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 55%;
+  /* shadow follows the crumpling silhouette (box-shadow would be clipped) */
+  filter: var(--cr-card-shadow);
+  will-change: transform;
+}
+
+/* the sheet carries the card surface and the animated clip-path */
+.cr-sheet {
+  position: absolute;
+  inset: 0;
+  border-radius: 16px;
+  background: var(--cr-card-bg);
+  will-change: clip-path;
+  backface-visibility: hidden; /* GPU stability under clip + blur */
+}
+
+/* shading layer that ramps in as the sheet crushes — gives the flat white sheet
+   the same lit-core / shadowed-edge read as the drawn PaperBall, so the two read
+   as one material at the hand-off. A real child (not ::before) so Motion can
+   target it; lives INSIDE .cr-sheet so the animated clip-path crushes it too. */
+.cr-shade {
+  position: absolute;
+  inset: 0;
+  border-radius: 16px;
+  pointer-events: none;
+  opacity: 0;
+  /* white core (matching PaperBall's cx38% cy32%) darkening to its beige/grey
+     edge — paper darkens at folds, never lightens. The sheet is pure white, so
+     normal blending over it equals multiply: no mix-blend-mode (offscreen pass)
+     and no will-change (idle GPU layer) needed — same look, far cheaper. */
+  background: radial-gradient(
+    ellipse 116% 100% at 38% 32%,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(240, 239, 235, 0) 46%,
+    rgba(217, 216, 209, 0.55) 74%,
+    rgba(96, 96, 90, 0.42) 100%
+  );
+}
+
+/* a single soft specular pop where PaperBall's blurred highlight sits — the
+   gradient is its own softness (no blur filter, so no persistent raster layer) */
+.cr-shade-hi {
+  position: absolute;
+  inset: 0;
+  border-radius: 16px;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(circle 26% at 38% 30%, rgba(255, 255, 255, 0.7) 0%, rgba(255, 255, 255, 0.12) 55%, rgba(255, 255, 255, 0) 100%);
+}
+
+.cr-card-inner {
+  position: absolute;
+  inset: 0;
+  padding: 16px 18px 14px;
+  color: var(--cr-card-ink);
+}
+
+.cr-card-title {
+  margin: 0 36px 6px 0;
+  font-size: 0.95rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.cr-card-text {
+  margin: 0;
+  max-width: 88%;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--cr-card-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cr-card-time {
+  position: absolute;
+  left: 18px;
+  bottom: 13px;
+  font-size: 0.68rem;
+  color: var(--cr-card-faint);
+}
+
+/* fold lines that darken across the card as it crushes */
+.cr-folds {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---- the delete button ------------------------------------------------------ */
+.cr-del {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #f2f2f4;
+  color: #98989d;
+  cursor: pointer;
+  transition:
+    background 150ms ease,
+    color 150ms ease,
+    transform 150ms ease,
+    box-shadow 150ms ease;
+}
+
+/* >=44px touch target without enlarging the 30px visual disc (WCAG 2.5.5):
+   a transparent inset:-7px ring extends the clickable area (30 + 2*7 = 44px) —
+   clicks on it still hit the button it belongs to */
+.cr-del::before {
+  content: '';
+  position: absolute;
+  inset: -7px;
+  border-radius: 50%;
+}
+
+.cr-del svg {
+  overflow: visible;
+}
+
+.cr-del-lid {
+  transform-origin: 5px 7px;
+  transition: transform 180ms cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+/* hover affordances only for real pointers — on touch :hover sticks after the
+   tap and would freeze the button red/lifted with the lid tilted open */
+@media (hover: hover) and (pointer: fine) {
+  .cr-del:hover {
+    background: var(--cr-red);
+    color: #fff;
+    transform: scale(1.02);
+    box-shadow: 0 4px 12px -4px rgba(255, 59, 48, 0.6);
+  }
+
+  .cr-del:hover .cr-del-lid {
+    transform: rotate(-16deg) translateY(-1.5px);
+  }
+}
+
+.cr-del:active {
+  transform: scale(0.96);
+}
+
+.cr-del:focus-visible {
+  outline: 2px solid var(--cr-red);
+  outline-offset: 2px;
+}
+
+/* while waiting for a click, the live delete button beckons: a soft red ring
+   blooms off it every few seconds (stops the moment a delete is running) */
+.crumple[data-phase='idle'] .cr-card-top .cr-del::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 59, 48, 0.55);
+  opacity: 0;
+  animation: cr-beckon 3.4s ease-out 1.4s infinite;
+  pointer-events: none;
+}
+
+@keyframes cr-beckon {
+  0% {
+    opacity: 0.8;
+    transform: scale(0.62);
+  }
+  32% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crumple[data-phase='idle'] .cr-card-top .cr-del::after {
+    animation: none;
+  }
+
+  /* no decorative movement under reduce: drop the card's hover lift (the
+     shadow-deepen on .cr-crush is a filter change, not movement, so it stays
+     as feedback). Also kill the transform transition so the revert isn't animated. */
+  .cr-crush {
+    transition: filter 0.2s ease;
+  }
+
+  .crumple[data-phase='idle'] .cr-card-top:hover .cr-crush {
+    transform: none;
+  }
+
+  /* deck promotion: no bouncy transform spring under reduce — fade only, so the
+     next card doesn't visibly spring up */
+  .cr-card {
+    transition: opacity 0.2s ease;
+  }
+}
+
+/* paper flecks thrown off mid-crunch — centred on the deck, above the cards */
+.cr-bits {
+  position: absolute;
+  left: 50%;
+  top: 74px;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.cr-bit {
+  position: absolute;
+  left: -4px;
+  top: -3px;
+  width: 8px;
+  height: 6px;
+  border-radius: 1.5px;
+  background: #ececea;
+  box-shadow: 0 1px 2px rgba(10, 10, 14, 0.3);
+  opacity: 0;
+}
+
+.cr-bit:nth-child(2n) {
+  width: 6px;
+  height: 5px;
+}
+
+.cr-bit:nth-child(3n) {
+  width: 9px;
+  height: 4px;
+}
+
+/* ---- the flying ball -------------------------------------------------------- */
+.cr-ball-wrap {
+  position: absolute;
+  left: 50%;
+  top: 74px; /* centre of the top card */
+  transform: translate(-50%, -50%);
+  /* above every deck card — the ball pops in OVER the wreck, never behind
+     the next card sliding up */
+  z-index: 5;
+}
+
+.cr-ball {
+  width: 78px;
+  height: 78px;
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform, opacity, filter;
+}
+
+/* ---- the basket -------------------------------------------------------------- */
+.cr-bin-zone {
+  position: absolute;
+  inset: auto 0 8px 0;
+  display: grid;
+  place-items: end center;
+  overflow: hidden;
+  height: 244px;
+  pointer-events: none;
+}
+
+.cr-bin-spot {
+  position: relative;
+  pointer-events: none;
+}
+
+.cr-bin-stack {
+  position: relative;
+  width: 156px;
+  height: 234px;
+  transform-origin: 50% 100%;
+  will-change: transform;
+}
+
+.cr-bin-back {
+  z-index: 0;
+}
+
+.cr-bin-front {
+  z-index: 2;
+  pointer-events: none;
+}
+
+.cr-bin-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+  pointer-events: none;
+}
+
+.cr-pile-shadow {
+  position: absolute;
+  left: 50%;
+  height: 11%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, var(--cr-pile-shadow-core) 0%, rgba(0, 0, 0, 0) 72%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* clipped interior — balls fall on the 2D floor inside the perspective bin */
+.cr-pile-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+}
+
+.cr-pile-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* a settled ball: the spot owns position (margins, no transform) so impact
+   jolts can animate it; the inner ball owns the physics rotation */
+.cr-pile-spot {
+  position: absolute;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.cr-pile-ball {
+  width: 100%;
+  height: 100%;
+}
+
+/* the transient falling ball — driven along the simulated trajectory */
+.cr-fall-ball {
+  position: absolute;
+  left: 0;
+  top: 0;
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+/* highlight ring that blooms off the rim as a ball drops through the mouth */
+.cr-gulp {
+  position: absolute;
+  left: 50%;
+  top: 14%; /* BIN_ART mouth centre (42/300) */
+  width: 68%;
+  height: 11%;
+  margin: -5.5% 0 0 -34%;
+  border: 1.4px solid rgba(255, 255, 255, 0.62);
+  border-radius: 50%;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.2);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* soft contact shadow under the basket — two stacked ellipses (a tighter core
+   over a wide diffuse ambient) plus a blur, so it reads as a real grounded
+   shadow, not a hard dark puddle */
+.cr-bin-shadow {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  width: 160px;
+  height: 30px;
+  margin-left: -80px;
+  border-radius: 50%;
+  background:
+    radial-gradient(ellipse 42% 64% at 50% 50%, var(--cr-ground) 0%, rgba(0, 0, 0, 0) 72%),
+    radial-gradient(ellipse 50% 96% at 50% 50%, var(--cr-ground-svg) 0%, rgba(0, 0, 0, 0) 78%);
+  filter: blur(5px);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* a little puff of paper dust off the mouth as a wad drops in */
+.cr-flecks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.cr-fleck {
+  position: absolute;
+  top: 13%; /* clustered around the mouth, not the very top of the stage */
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgba(234, 237, 242, 0.9);
+  box-shadow: 0 0 2px rgba(255, 255, 255, 0.4);
+  opacity: 0;
+}
+
+.cr-fleck:nth-child(1) { left: 39%; }
+.cr-fleck:nth-child(2) { left: 47%; top: 11.5%; width: 2.5px; height: 2.5px; }
+.cr-fleck:nth-child(3) { left: 54%; top: 12.5%; }
+.cr-fleck:nth-child(4) { left: 61%; top: 11%; width: 2.5px; height: 2.5px; }
+
+/* hidden switch — toggled on delete only to nudge an iOS system haptic (17.4+);
+   kept rendered (not display:none) so the haptic can fire, but invisible/inert */
+.cr-haptic {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* once gone, collapse the stage out of the flow gracefully */
+.crumple[data-phase='gone'] {
+  height: 0;
+  transition: height 240ms ease 120ms;
+}
+
+/* On phones the component should fill the screen and feel prominent, not float
+   small in the middle. Scale the deck + basket UP (bigger than desktop) — the
+   basket keeps its exact aspect ratio so the pile physics/bounds still hold, and
+   the toss/ball sizes derive from the measured box so they follow automatically. */
+@media (max-width: 480px) {
+  .crumple {
+    height: 518px;
+  }
+
+  .cr-deck {
+    width: 270px;
+    height: 161px;
+  }
+
+  .cr-ball-wrap,
+  .cr-bits {
+    top: 80px;
+  }
+
+  .cr-bin-stack {
+    width: 170px;
+    height: 255px;
+  }
+
+  .cr-bin-zone {
+    height: 262px;
+  }
+
+  .cr-bin-shadow {
+    width: 172px;
+    margin-left: -86px;
+  }
+}

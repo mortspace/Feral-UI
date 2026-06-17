@@ -1,0 +1,36 @@
+/* Fur — wrapper + canvas chrome. The coat itself is painted in JS. */
+
+.fur {
+  position: relative;
+  display: block;
+  /* the fringe pokes past the box on purpose */
+  overflow: visible;
+  /* vertical page scroll still works while horizontal strokes pet the fur */
+  touch-action: pan-y;
+  transition: transform 420ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* a happy little lean-in when you reach for it */
+.fur:hover {
+  transform: scale(1.015) rotate(-0.4deg);
+}
+
+.fur-canvas {
+  position: absolute;
+  pointer-events: none;
+}
+
+.fur-content {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fur {
+    transition: none;
+  }
+  .fur:hover {
+    transform: none;
+  }
+}
